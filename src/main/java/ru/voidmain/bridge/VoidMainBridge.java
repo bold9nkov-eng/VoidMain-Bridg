@@ -210,13 +210,16 @@ public final class VoidMainBridge extends JavaPlugin {
     }
 
     private void completeClaim(long id, UUID uuid) {
-        try {
-            JsonObject body = new JsonObject();
-            body.addProperty("balance", pointsApi.look(uuid));
-            post("/api/bridge/claims/" + id + "/complete", body);
-        } catch (Exception e) {
-            getLogger().warning("Claim #" + id + " was paid locally but website confirmation failed; it will be retried: " + e.getMessage());
-        }
+        int balance = pointsApi.look(uuid);
+        CompletableFuture.runAsync(() -> {
+            try {
+                JsonObject body = new JsonObject();
+                body.addProperty("balance", balance);
+                post("/api/bridge/claims/" + id + "/complete", body);
+            } catch (Exception e) {
+                getLogger().warning("Claim #" + id + " was paid locally but website confirmation failed; it will be retried: " + e.getMessage());
+            }
+        });
     }
 
     private void post(String path, JsonObject body) throws Exception { request("POST", path, body); }
