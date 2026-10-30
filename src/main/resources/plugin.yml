@@ -1,0 +1,13 @@
+name: VoidMain-Bridge
+version: 1.0.0
+main: ru.voidmain.bridge.VoidMainBridge
+api-version: '1.21'
+softdepend: [PlayerPoints]
+commands:
+  voidmain:
+    description: VoidMain website bridge commands
+    usage: /voidmain <link|balance|help>
+permissions:
+  voidmain.admin:
+    description: Manage VoidMain Bridge
+    default: op
