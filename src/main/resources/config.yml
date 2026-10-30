@@ -1,15 +1,16 @@
 # VoidMain-Bridge configuration
-# Website connection will be enabled after configuring the website API.
 website:
   url: "https://voidmain-website.onrender.com"
-  shared-secret: "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"
+  # Must match Render environment variable VOIDMAIN_BRIDGE_SECRET.
+  # Generate a long random value; never publish the real value in GitHub.
+  shared-secret: "SET_THE_SAME_PRIVATE_RANDOM_SECRET_AS_RENDER"
   poll-seconds: 30
 rewards:
   daily-amount: 2
   timezone: "Europe/Moscow"
 messages:
   prefix: "&8[&5VoidMain&8] "
-  link-created: "&aКод привязки: &f%code% &7— введи его в личном кабинете сайта VoidMain."
+  link-created: "&aКод привязки: &f%code% &7— введи его в личном кабинете сайта VoidMain. Код действует 10 минут."
   already-linked: "&cЭтот Minecraft-аккаунт уже привязан."
   balance: "&dТвой баланс VoidCoin: &f%balance%"
   playerpoints-missing: "&cДля работы VoidMain-Bridge нужен установленный PlayerPoints."
