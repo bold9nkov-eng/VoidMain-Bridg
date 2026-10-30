@@ -1,5 +1,5 @@
 name: VoidMain-Bridge
-version: 1.0.0
+version: 1.1.0
 main: ru.voidmain.bridge.VoidMainBridge
 api-version: '1.21'
 softdepend: [PlayerPoints]
