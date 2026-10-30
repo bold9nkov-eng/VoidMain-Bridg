@@ -35,6 +35,17 @@ public final class VoidMainBridge extends JavaPlugin {
     @Override
     public void onEnable() {
         saveDefaultConfig();
+        var rootCommand = getCommand("voidmain");
+        if (rootCommand != null) {
+            rootCommand.setExecutor(this);
+            rootCommand.setTabCompleter((sender, command, alias, args) -> {
+                if (args.length != 1) return java.util.List.of();
+                String input = args[0].toLowerCase();
+                return java.util.List.of("link", "balance", "help").stream().filter(s -> s.startsWith(input)).toList();
+            });
+        } else {
+            getLogger().severe("Command 'voidmain' is missing from plugin.yml; /voidmain cannot be registered.");
+        }
         baseUrl = getConfig().getString("website.url", "https://voidmain-website.onrender.com").replaceAll("/+$", "");
         secret = getConfig().getString("website.shared-secret", "");
         try {
