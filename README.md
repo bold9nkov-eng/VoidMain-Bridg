@@ -1,9 +1,9 @@
-# VoidMain-Bridge 1.1.0
+# VoidMain-Bridge 1.2.0
 
 Paper 1.21.11 / Java 21 integration plugin for the VoidMain website.
 
 ## Features
-- `/voidmain link` creates a 6-digit, 10-minute website link code.
+- `/voidmain link` creates a 6-digit, 10-minute website link code (registered executor + tab suggestions for `link`, `balance`, `help`; `/vm` alias).
 - Website account links are one-to-one with a Minecraft UUID.
 - `/voidmain balance` reads the real PlayerPoints balance.
 - Daily reward requests are queued by the website and paid through PlayerPoints.
