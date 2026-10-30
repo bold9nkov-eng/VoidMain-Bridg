@@ -226,7 +226,7 @@ public final class VoidMainBridge extends JavaPlugin {
 
     private String request(String method, String path, JsonObject body) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(baseUrl + path))
-                .timeout(Duration.ofSeconds(12)).header("X-Bridge-Secret", secret);
+                .timeout(Duration.ofSeconds(45)).header("X-Bridge-Secret", secret);
         if ("POST".equals(method)) builder.header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body == null ? "{}" : body.toString()));
         else builder.GET();
