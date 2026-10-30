@@ -1,22 +1,28 @@
-# VoidMain-Bridge
+# VoidMain-Bridge 1.1.0
 
-Paper 1.21.11 / Java 21 bridge plugin for the VoidMain website and PlayerPoints.
+Paper 1.21.11 / Java 21 integration plugin for the VoidMain website.
 
-## Current commands
-- `/voidmain link` — creates a one-time six-digit linking code in-game.
-- `/voidmain balance` — displays the player's PlayerPoints balance (used as VoidCoin).
-- `/voidmain help` — command help.
+## Features
+- `/voidmain link` creates a 6-digit, 10-minute website link code.
+- Website account links are one-to-one with a Minecraft UUID.
+- `/voidmain balance` reads the real PlayerPoints balance.
+- Daily reward requests are queued by the website and paid through PlayerPoints.
+- Server heartbeat publishes online/max players and version.
+- Linked players' playtime, kills, deaths and PlayerPoints balance are synchronized while online.
+- SQLite receipt journal prevents a successfully processed claim from being paid again after a restart.
 
-## Requirements
-- Paper 1.21.11
-- Java 21
-- PlayerPoints 3.3.5 or compatible
+## Required setup
+1. Install PlayerPoints 3.3.5 or compatible version on the Paper server.
+2. Set a long random secret as Render environment variable `VOIDMAIN_BRIDGE_SECRET`.
+3. Put the exact same secret in `plugins/VoidMain-Bridge/config.yml` at `website.shared-secret`.
+4. Set Render environment variable `VOIDMAIN_DAILY_AMOUNT=2` (optional; default is 2).
+5. Set `VOIDMAIN_TIMEZONE=Europe/Moscow` on Render if a different calendar timezone is required.
+6. Deploy the website and restart the Minecraft server after installing the JAR.
+
+## Important reliability note
+PlayerPoints does not expose a transaction shared with this plugin's local SQLite database. The plugin writes a durable `processing` receipt before calling PlayerPoints and marks it `paid` after success. This favors preventing duplicate payments. If the server crashes in the tiny interval between writing `processing` and PlayerPoints completing the give operation, that claim may need manual administrator review; it will not be automatically paid twice. If website confirmation fails after a successful payment, the local receipt allows the plugin to retry confirmation without issuing the points again.
 
 ## Build
-```bash
-mvn clean package
-```
-The JAR is created in `target/voidmain-bridge-1.0.0.jar`.
+`mvn clean package`
 
-## Important
-The initial project scaffold currently generates link codes locally. Website-side code redemption, secure reward queue processing, and statistics synchronization still need to be connected before website linking or daily rewards can work end-to-end. Do not publish the shared secret or expose it to players.
+The JAR is produced in `target/` and uploaded by GitHub Actions.
