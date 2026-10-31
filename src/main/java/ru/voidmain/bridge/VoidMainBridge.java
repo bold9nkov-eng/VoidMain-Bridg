@@ -232,7 +232,7 @@ public final class VoidMainBridge extends JavaPlugin {
 
     private void processNicknameClaim(long id, String minecraftName, int amount) {
         if (pointsApi == null || amount < 1 || minecraftName == null || !minecraftName.matches("[A-Za-z0-9_]{3,16}")) return;
-        Player player = getServer().getPlayerExact(minecraftName);
+        Player player = getServer().getOnlinePlayers().stream().filter(p -> p.getName().equalsIgnoreCase(minecraftName)).findFirst().orElse(null);
         if (player == null || !player.isOnline()) return; // Keep the request pending until this player joins.
         UUID uuid = player.getUniqueId();
         try {
