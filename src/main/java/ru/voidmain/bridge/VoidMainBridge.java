@@ -53,6 +53,7 @@ public final class VoidMainBridge extends JavaPlugin {
             localDb = DriverManager.getConnection("jdbc:sqlite:" + Path.of(getDataFolder().getAbsolutePath(), "bridge.sqlite"));
             try (var st = localDb.createStatement()) {
                 st.executeUpdate("CREATE TABLE IF NOT EXISTS claim_receipts (claim_id INTEGER PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)");
+                st.executeUpdate("CREATE TABLE IF NOT EXISTS nickname_claim_receipts (claim_id INTEGER PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)");
             }
         } catch (Exception e) {
             getLogger().severe("Could not initialize local claim database: " + e.getMessage());
@@ -175,6 +176,15 @@ public final class VoidMainBridge extends JavaPlugin {
                 int amount = claim.get("amount").getAsInt();
                 getServer().getScheduler().runTask(this, () -> processClaim(id, uuid, amount));
             }
+            String nicknameResponse = request("GET", "/api/bridge/nickname-claims", null);
+            JsonArray nicknameClaims = JsonParser.parseString(nicknameResponse).getAsJsonObject().getAsJsonArray("claims");
+            for (var element : nicknameClaims) {
+                JsonObject claim = element.getAsJsonObject();
+                long id = claim.get("id").getAsLong();
+                String minecraftName = claim.get("minecraft_name").getAsString();
+                int amount = claim.get("amount").getAsInt();
+                getServer().getScheduler().runTask(this, () -> processNicknameClaim(id, minecraftName, amount));
+            }
         } catch (Exception e) {
             getLogger().fine("Claim polling failed: " + e.getMessage());
         }
@@ -218,6 +228,64 @@ public final class VoidMainBridge extends JavaPlugin {
         } catch (Exception e) {
             getLogger().warning("Could not process VoidCoin claim #" + id + ": " + e.getMessage());
         }
+    }
+
+    private void processNicknameClaim(long id, String minecraftName, int amount) {
+        if (pointsApi == null || amount < 1 || minecraftName == null || !minecraftName.matches("[A-Za-z0-9_]{3,16}")) return;
+        Player player = getServer().getPlayerExact(minecraftName);
+        if (player == null || !player.isOnline()) return; // Keep the request pending until this player joins.
+        UUID uuid = player.getUniqueId();
+        try {
+            synchronized (localDb) {
+                try (PreparedStatement check = localDb.prepareStatement("SELECT state FROM nickname_claim_receipts WHERE claim_id=?")) {
+                    check.setLong(1, id);
+                    try (var rs = check.executeQuery()) {
+                        if (rs.next()) {
+                            if ("paid".equals(rs.getString("state"))) completeNicknameClaim(id, uuid);
+                            return;
+                        }
+                    }
+                }
+                try (PreparedStatement insert = localDb.prepareStatement("INSERT INTO nickname_claim_receipts(claim_id,state) VALUES(?,'processing')")) {
+                    insert.setLong(1, id);
+                    insert.executeUpdate();
+                }
+            }
+            boolean paid = pointsApi.give(uuid, amount);
+            if (!paid) {
+                synchronized (localDb) {
+                    try (PreparedStatement delete = localDb.prepareStatement("DELETE FROM nickname_claim_receipts WHERE claim_id=? AND state='processing'")) {
+                        delete.setLong(1, id);
+                        delete.executeUpdate();
+                    }
+                }
+                return;
+            }
+            synchronized (localDb) {
+                try (PreparedStatement update = localDb.prepareStatement("UPDATE nickname_claim_receipts SET state='paid',updated_at=CURRENT_TIMESTAMP WHERE claim_id=?")) {
+                    update.setLong(1, id);
+                    update.executeUpdate();
+                }
+            }
+            player.sendMessage(color(getConfig().getString("messages.prefix", "&8[&5VoidMain&8] ")
+                    + "&aТебе начислено &d" + amount + " VoidCoin&a за награду сайта!"));
+            completeNicknameClaim(id, uuid);
+        } catch (Exception e) {
+            getLogger().warning("Could not process nickname VoidCoin claim #" + id + ": " + e.getMessage());
+        }
+    }
+
+    private void completeNicknameClaim(long id, UUID uuid) {
+        int balance = pointsApi.look(uuid);
+        CompletableFuture.runAsync(() -> {
+            try {
+                JsonObject body = new JsonObject();
+                body.addProperty("balance", balance);
+                post("/api/bridge/nickname-claims/" + id + "/complete", body);
+            } catch (Exception e) {
+                getLogger().warning("Nickname claim #" + id + " was paid locally but website confirmation failed; it will be retried: " + e.getMessage());
+            }
+        });
     }
 
     private void completeClaim(long id, UUID uuid) {
