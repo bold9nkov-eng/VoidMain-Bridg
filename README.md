@@ -1,4 +1,4 @@
-# VoidMain-Bridge 1.2.0
+# VoidMain-Bridge 1.3.0
 
 Paper 1.21.11 / Java 21 integration plugin for the VoidMain website.
 
@@ -6,7 +6,8 @@ Paper 1.21.11 / Java 21 integration plugin for the VoidMain website.
 - `/voidmain link` creates a 6-digit, 10-minute website link code (registered executor + tab suggestions for `link`, `balance`, `help`; `/vm` alias).
 - Website account links are one-to-one with a Minecraft UUID.
 - `/voidmain balance` reads the real PlayerPoints balance.
-- Daily reward requests are queued by the website and paid through PlayerPoints.
+- Daily reward requests are queued by the website by Minecraft nickname; the named player receives the configured VoidCoin amount through PlayerPoints when online.
+- Website reward claims do not require `/voidmain link`; the player enters their nickname in the website account.
 - Server heartbeat publishes online/max players and version.
 - Linked players' playtime, kills, deaths and PlayerPoints balance are synchronized while online.
 - SQLite receipt journal prevents a successfully processed claim from being paid again after a restart.
