@@ -1,8 +1,8 @@
 name: VoidMain-Bridge
-version: 1.3.0
+version: 1.4.0
 main: ru.voidmain.bridge.VoidMainBridge
 api-version: '1.21'
-softdepend: [PlayerPoints]
+softdepend: [PlayerPoints, LuckPerms]
 commands:
   voidmain:
     description: VoidMain website bridge commands
