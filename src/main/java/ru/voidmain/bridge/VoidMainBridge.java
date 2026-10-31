@@ -54,6 +54,7 @@ public final class VoidMainBridge extends JavaPlugin {
             try (var st = localDb.createStatement()) {
                 st.executeUpdate("CREATE TABLE IF NOT EXISTS claim_receipts (claim_id INTEGER PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)");
                 st.executeUpdate("CREATE TABLE IF NOT EXISTS nickname_claim_receipts (claim_id INTEGER PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)");
+                st.executeUpdate("CREATE TABLE IF NOT EXISTS shop_order_receipts (order_id INTEGER PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)");
             }
         } catch (Exception e) {
             getLogger().severe("Could not initialize local claim database: " + e.getMessage());
@@ -74,6 +75,7 @@ public final class VoidMainBridge extends JavaPlugin {
         long interval = Math.max(15, getConfig().getLong("website.poll-seconds", 30));
         getServer().getScheduler().runTaskTimer(this, this::sendHeartbeat, 40L, interval * 20L);
         getServer().getScheduler().runTaskTimerAsynchronously(this, this::pollClaims, 80L, interval * 20L);
+        getServer().getScheduler().runTaskTimerAsynchronously(this, this::pollShopOrders, 100L, interval * 20L);
         getLogger().info("VoidMain-Bridge enabled. Website: " + baseUrl);
     }
 
@@ -188,6 +190,131 @@ public final class VoidMainBridge extends JavaPlugin {
         } catch (Exception e) {
             getLogger().fine("Claim polling failed: " + e.getMessage());
         }
+    }
+
+    private void pollShopOrders() {
+        if (!bridgeConfigured()) return;
+        try {
+            String response = request("GET", "/api/bridge/shop-orders", null);
+            JsonArray orders = JsonParser.parseString(response).getAsJsonObject().getAsJsonArray("orders");
+            for (var element : orders) {
+                JsonObject order = element.getAsJsonObject();
+                long id = order.get("id").getAsLong();
+                String name = order.get("minecraft_name").getAsString();
+                String type = order.get("product_type").getAsString();
+                String key = order.get("product_key").getAsString();
+                int coins = order.get("amount_voidcoin").getAsInt();
+                String details = order.has("details") && !order.get("details").isJsonNull() ? order.get("details").getAsString() : "";
+                getServer().getScheduler().runTask(this, () -> processShopOrder(id, name, type, key, coins, details));
+            }
+        } catch (Exception e) {
+            getLogger().fine("Shop order polling failed: " + e.getMessage());
+        }
+    }
+
+    private void processShopOrder(long id, String name, String type, String key, int coins, String details) {
+        if (!name.matches("[A-Za-z0-9_]{3,16}")) return;
+        try {
+            synchronized (localDb) {
+                try (PreparedStatement check = localDb.prepareStatement("SELECT state FROM shop_order_receipts WHERE order_id=?")) {
+                    check.setLong(1, id);
+                    try (var rs = check.executeQuery()) {
+                        if (rs.next()) {
+                            if ("delivered".equals(rs.getString("state")) || "admin_required".equals(rs.getString("state"))) {
+                                completeShopOrder(id, rs.getString("state"));
+                            }
+                            return;
+                        }
+                    }
+                }
+                try (PreparedStatement insert = localDb.prepareStatement("INSERT INTO shop_order_receipts(order_id,state) VALUES(?,'processing')")) {
+                    insert.setLong(1, id);
+                    insert.executeUpdate();
+                }
+            }
+
+            String finalState;
+            if ("coins".equals(type)) {
+                if (pointsApi == null || coins < 1 || coins > 10000) throw new IllegalArgumentException("Invalid VoidCoin amount");
+                UUID uuid = getServer().getOfflinePlayer(name).getUniqueId();
+                if (!pointsApi.give(uuid, coins)) throw new IllegalStateException("PlayerPoints rejected VoidCoin delivery");
+                Player online = getServer().getPlayerExact(name);
+                if (online != null) online.sendMessage(color(getConfig().getString("messages.prefix", "&8[&5VoidMain&8] ")
+                        + "&aПокупка успешно доставлена: &d" + coins + " VoidCoin&a!"));
+                finalState = "delivered";
+            } else if ("rank".equals(type)) {
+                String group = switch (key) {
+                    case "flower" -> "flower";
+                    case "harley" -> "harley";
+                    case "media" -> "media";
+                    case "division" -> "division";
+                    case "shining" -> "shining";
+                    case "void" -> "void";
+                    default -> null;
+                };
+                if (group == null) throw new IllegalArgumentException("Unknown rank key: " + key);
+                dispatchLuckPerms("lp user " + name + " parent add " + group);
+                Player online = getServer().getPlayerExact(name);
+                if (online != null) online.sendMessage(color(getConfig().getString("messages.prefix", "&8[&5VoidMain&8] ")
+                        + "&aТвой ранг &d" + group + " &aвыдан!"));
+                finalState = "delivered";
+            } else if ("custom_rank".equals(type)) {
+                if (!details.matches("[A-Za-zА-Яа-яЁё0-9_ -]{3,16}")) throw new IllegalArgumentException("Invalid custom rank name");
+                dispatchLuckPerms("lp user " + name + " parent add void");
+                String prefix = ChatColor.stripColor(color("&5[" + details + "] "));
+                dispatchLuckPerms("lp user " + name + " meta setprefix 100 \"" + prefix.replace("\\", "").replace("\"", "") + "\"");
+                Player online = getServer().getPlayerExact(name);
+                if (online != null) online.sendMessage(color(getConfig().getString("messages.prefix", "&8[&5VoidMain&8] ")
+                        + "&aТвой личный ранг &d" + details + " &aвыдан с правами Void!"));
+                finalState = "delivered";
+            } else if ("custom_title".equals(type) || "item_skin".equals(type)) {
+                finalState = "admin_required";
+                getLogger().info("Paid shop order #" + id + " needs staff work: " + type + " for " + name + " (" + details + ")");
+                Player online = getServer().getPlayerExact(name);
+                if (online != null) online.sendMessage(color(getConfig().getString("messages.prefix", "&8[&5VoidMain&8] ")
+                        + "&aЗаказ принят администрацией. Номер: &f#" + id));
+            } else {
+                throw new IllegalArgumentException("Unsupported shop order type: " + type);
+            }
+
+            synchronized (localDb) {
+                try (PreparedStatement update = localDb.prepareStatement("UPDATE shop_order_receipts SET state=?,updated_at=CURRENT_TIMESTAMP WHERE order_id=?")) {
+                    update.setString(1, finalState);
+                    update.setLong(2, id);
+                    update.executeUpdate();
+                }
+            }
+            completeShopOrder(id, finalState);
+        } catch (Exception e) {
+            synchronized (localDb) {
+                try (PreparedStatement delete = localDb.prepareStatement("DELETE FROM shop_order_receipts WHERE order_id=? AND state='processing'")) {
+                    delete.setLong(1, id);
+                    delete.executeUpdate();
+                } catch (Exception ignored) {}
+            }
+            getLogger().warning("Could not deliver shop order #" + id + ": " + e.getMessage());
+        }
+    }
+
+    private void dispatchLuckPerms(String command) {
+        if (getServer().getPluginManager().getPlugin("LuckPerms") == null) {
+            throw new IllegalStateException("LuckPerms is not installed; cannot deliver rank");
+        }
+        if (!getServer().dispatchCommand(getServer().getConsoleSender(), command)) {
+            throw new IllegalStateException("LuckPerms command failed: " + command);
+        }
+    }
+
+    private void completeShopOrder(long id, String status) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                JsonObject body = new JsonObject();
+                body.addProperty("status", status);
+                post("/api/bridge/shop-orders/" + id + "/complete", body);
+            } catch (Exception e) {
+                getLogger().warning("Shop order #" + id + " completion sync failed: " + e.getMessage());
+            }
+        });
     }
 
     private void processClaim(long id, UUID uuid, int amount) {
