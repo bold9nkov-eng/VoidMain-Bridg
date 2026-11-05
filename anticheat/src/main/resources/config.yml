@@ -1,18 +1,12 @@
-# VoidMain AntiCheat — GrimAC + Vulcan event bridge
+# VoidMain AntiCheat — GrimAC + Vulcan integration
 # Paper 1.21.11 / Java 21
 
-prefix: "&5&lVOIDMAIN &8»"
-
 exempt:
-  # Operators are ignored automatically.
   operators: true
-  # Additional permission for staff that should never be flagged or punished.
   permission: "voidmain.anticheat.bypass"
 
 grim:
   enabled: true
-  # Number of repeated flags from the SAME Grim check inside the time window.
-  # These are deliberately conservative to avoid banning from a single setback.
   window-seconds: 15
   flag-thresholds:
     Reach: 4
@@ -24,20 +18,23 @@ grim:
 
 vulcan:
   enabled: true
-  # Intercepts Vulcan's own punishment only for combat checks.
-  # Non-combat Vulcan punishments continue to follow Vulcan's config.yml.
   intercept-combat-punishments: true
+  # Ladder applies once for each VulcanPunishEvent, not for every raw flag.
+  # The counter is stored by UUID in plugins/VoidMain-AntiCheat/violations.yml.
+  violation-ladder:
+    enabled: true
+
+manual-check:
+  # A player is automatically released after this many seconds if staff forgets.
+  timeout-seconds: 300
 
 punishment:
   enabled: true
-  # 30 ticks = 1.5 seconds of animation.
   animation-ticks: 30
   drop-inventory: true
-  # 0 = permanent name ban; otherwise number of days.
   ban-days: 0
   broadcast: true
   reason-prefix: "VoidMain AntiCheat"
-  # Purple-white RGB colors used by the animation.
   purple-rgb: "8A2BE2"
   lavender-rgb: "C9A0FF"
   white-rgb: "FFFFFF"
