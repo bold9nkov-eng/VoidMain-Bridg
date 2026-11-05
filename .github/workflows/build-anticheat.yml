@@ -28,5 +28,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: VoidMain-AntiCheat-1.0.2
-          path: anticheat/target/VoidMain-AntiCheat-1.0.0.jar
+          path: anticheat/target/VoidMain-AntiCheat-1.0.2.jar
           if-no-files-found: error
