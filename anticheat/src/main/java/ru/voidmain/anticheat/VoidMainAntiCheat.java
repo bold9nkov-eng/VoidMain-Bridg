@@ -11,6 +11,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Event;
 import org.bukkit.event.EventPriority;
@@ -40,6 +41,8 @@ import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
 
+import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -56,6 +59,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class VoidMainAntiCheat extends JavaPlugin implements Listener, CommandExecutor {
     private final Map<UUID, PunishmentSession> sessions = new ConcurrentHashMap<>();
+    private final Map<UUID, ManualCheckSession> manualChecks = new ConcurrentHashMap<>();
+    private File violationsFile;
+    private YamlConfiguration violationsData;
     private final Map<UUID, PermissionAttachment> grimAttachments = new ConcurrentHashMap<>();
     private final Map<UUID, Map<String, ConcurrentLinkedDeque<Long>>> grimFlagWindows = new ConcurrentHashMap<>();
     private volatile boolean grimHooked;
@@ -64,6 +70,7 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
     @Override
     public void onEnable() {
         saveDefaultConfig();
+        loadViolations();
         PluginManager manager = Bukkit.getPluginManager();
         Plugin grim = findPlugin("GrimAC");
         Plugin vulcan = findPlugin("Vulcan");
@@ -131,6 +138,16 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
             }
         }
         sessions.clear();
+        for (ManualCheckSession check : manualChecks.values()) {
+            if (check.timeoutTask != null) check.timeoutTask.cancel();
+            if (check.player != null && check.player.isOnline()) {
+                check.player.setInvulnerable(check.wasInvulnerable);
+                check.player.removePotionEffect(PotionEffectType.GLOWING);
+                if (check.previousGlowing != null) check.player.addPotionEffect(check.previousGlowing);
+            }
+        }
+        manualChecks.clear();
+        saveViolations();
         for (Map.Entry<UUID, PermissionAttachment> entry : grimAttachments.entrySet()) {
             Player player = Bukkit.getPlayer(entry.getKey());
             if (player != null) {
@@ -166,7 +183,8 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
 
     private void handleVulcanFlag(Event event) {
         Player player = (Player) invoke(event, "getPlayer");
-        if (player != null && isExempt(player)) {
+        if (player != null && isExempt(player)
+                && !manualChecks.containsKey(player.getUniqueId())) {
             invoke(event, "setCancelled", true);
         }
     }
@@ -174,13 +192,7 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
     private void handleVulcanPunish(Event event) {
         Player player = (Player) invoke(event, "getPlayer");
         Object check = invoke(event, "getCheck");
-        if (player == null || check == null) {
-            return;
-        }
-        if (isExempt(player)) {
-            invoke(event, "setCancelled", true);
-            return;
-        }
+        if (player == null || check == null) return;
 
         String name = stringValue(invoke(check, "getName"), "Unknown");
         String category = stringValue(invoke(check, "getCategory"), "");
@@ -190,9 +202,94 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
             return;
         }
 
-        // Cancel Vulcan's configured kick/ban command. The bridge runs one staged punishment instead.
+        // Exempt accounts remain immune to automatic punishment. During a manually opened check,
+        // however, their Vulcan alerts are visible to staff for inspection.
+        if (isExempt(player)) {
+            invoke(event, "setCancelled", true);
+            if (manualChecks.containsKey(player.getUniqueId())) {
+                notifyStaff(gradient("&d" + player.getName() + " &fполучил PunishEvent Vulcan по проверке &d" + name
+                        + "&f, но автоматическое наказание отменено (ручная проверка)."));
+            }
+            return;
+        }
+
+        // Replace Vulcan's own action with persistent staged punishment.
         invoke(event, "setCancelled", true);
-        startPunishment(player, "Vulcan", name);
+        int count = incrementViolation(player.getUniqueId());
+        applyVulcanPunishmentStage(player, name, count);
+    }
+
+    private void applyVulcanPunishmentStage(Player player, String check, int count) {
+        switch (count) {
+            case 1 -> {
+                getLogger().info("Vulcan stage 1: ignored " + player.getName() + " (" + check + ")");
+                notifyStaff(gradient("&7Vulcan: первое срабатывание &d" + player.getName()
+                        + " &8(&f" + check + "&8) &7— проигнорировано."));
+            }
+            case 2 -> {
+                player.sendMessage(gradient("&5&lVOIDMAIN &8» &fПредупреждение: повторное нарушение &d"
+                        + check + "&f. Следующее подтверждённое нарушение приведёт к кику."));
+                notifyStaff(gradient("&eПредупреждение &d" + player.getName()
+                        + " &8(&f" + check + "&8) &7— 2/5."));
+            }
+            case 3 -> {
+                notifyStaff(gradient("&cКик &d" + player.getName() + " &8(&f" + check + "&8) &7— 3/5."));
+                player.kickPlayer(gradient("&5&lVOIDMAIN\n&fВы отключены за повторное нарушение: &d" + check));
+            }
+            case 4 -> {
+                notifyStaff(gradient("&cБан на 2 дня &d" + player.getName()
+                        + " &8(&f" + check + "&8) &7— 4/5."));
+                startPunishment(player, "Vulcan", check + " (4/5)", 2);
+            }
+            default -> {
+                notifyStaff(gradient("&4Постоянный бан &d" + player.getName()
+                        + " &8(&f" + check + "&8) &7— " + count + "/5."));
+                startPunishment(player, "Vulcan", check + " (5/5)", 0);
+            }
+        }
+    }
+
+    private void notifyStaff(String message) {
+        Bukkit.getConsoleSender().sendMessage(message);
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            if (online.hasPermission("voidmain.anticheat.admin")) {
+                online.sendMessage(message);
+            }
+        }
+    }
+
+    private void loadViolations() {
+        if (!getDataFolder().exists() && !getDataFolder().mkdirs()) {
+            getLogger().warning("Не удалось создать папку данных для счётчиков нарушений.");
+        }
+        violationsFile = new File(getDataFolder(), "violations.yml");
+        violationsData = YamlConfiguration.loadConfiguration(violationsFile);
+    }
+
+    private synchronized int incrementViolation(UUID uuid) {
+        int count = violationsData.getInt(uuid.toString(), 0) + 1;
+        violationsData.set(uuid.toString(), count);
+        saveViolations();
+        return count;
+    }
+
+    private synchronized int getViolationCount(UUID uuid) {
+        return violationsData == null ? 0 : violationsData.getInt(uuid.toString(), 0);
+    }
+
+    private synchronized void resetViolationCount(UUID uuid) {
+        if (violationsData == null) loadViolations();
+        violationsData.set(uuid.toString(), 0);
+        saveViolations();
+    }
+
+    private synchronized void saveViolations() {
+        if (violationsData == null || violationsFile == null) return;
+        try {
+            violationsData.save(violationsFile);
+        } catch (IOException error) {
+            getLogger().severe("Не удалось сохранить violations.yml: " + error.getMessage());
+        }
     }
 
     private boolean isCombatCheck(String category, String name) {
@@ -267,7 +364,8 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
             Player player = Bukkit.getPlayer(uuid);
             if (player == null || !player.isOnline()) return;
 
-            if (isExempt(player)) {
+            boolean manualCheck = manualChecks.containsKey(player.getUniqueId());
+            if (isExempt(player) && !manualCheck) {
                 invoke(event, "setCancelled", true);
                 refreshGrimExemption(player);
                 return;
@@ -293,8 +391,13 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
 
             if (flags.size() >= required) {
                 flags.clear();
-                invoke(event, "setCancelled", true);
-                startPunishment(player, "GrimAC", checkName);
+                if (manualCheck) {
+                    notifyStaff(gradient("&d" + player.getName() + " &fполучил повторные флаги GrimAC: &d"
+                            + checkName + "&f. Автоматическое наказание не применяется во время ручной проверки."));
+                } else {
+                    invoke(event, "setCancelled", true);
+                    startPunishment(player, "GrimAC", checkName);
+                }
             }
         } catch (Throwable error) {
             getLogger().warning("Ошибка обработки события GrimAC: " + error.getMessage());
@@ -342,9 +445,13 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
     }
 
     private void startPunishment(Player player, String source, String check) {
+        startPunishment(player, source, check, getConfig().getInt("punishment.ban-days", 0));
+    }
+
+    private void startPunishment(Player player, String source, String check, int banDays) {
         if (!getConfig().getBoolean("punishment.enabled", true) || isExempt(player)) return;
         UUID uuid = player.getUniqueId();
-        PunishmentSession session = new PunishmentSession(player, source, check);
+        PunishmentSession session = new PunishmentSession(player, source, check, banDays);
         if (sessions.putIfAbsent(uuid, session) != null) return;
 
         player.closeInventory();
@@ -434,7 +541,7 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
 
         String reason = getConfig().getString("punishment.reason-prefix", "VoidMain AntiCheat")
                 + " | " + session.source + " | " + session.check;
-        int days = Math.max(0, getConfig().getInt("punishment.ban-days", 0));
+        int days = Math.max(0, session.banDays);
         Date expiry = days == 0 ? null : new Date(System.currentTimeMillis() + days * 86_400_000L);
         Bukkit.getBanList(BanList.Type.NAME).addBan(session.playerName, reason, expiry, getName());
 
@@ -510,6 +617,16 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         UUID uuid = event.getPlayer().getUniqueId();
+        ManualCheckSession manual = manualChecks.remove(uuid);
+        if (manual != null) {
+            if (manual.timeoutTask != null) manual.timeoutTask.cancel();
+            if (manual.player.isOnline()) {
+                manual.player.setInvulnerable(manual.wasInvulnerable);
+                manual.player.removePotionEffect(PotionEffectType.GLOWING);
+                if (manual.previousGlowing != null) manual.player.addPotionEffect(manual.previousGlowing);
+            }
+            notifyStaff(gradient("&e" + event.getPlayer().getName() + " вышел во время ручной проверки."));
+        }
         PunishmentSession session = sessions.get(uuid);
         if (session != null) {
             dropAndBanOnQuit(session);
@@ -527,7 +644,7 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
 
     @EventHandler
     public void onMove(PlayerMoveEvent event) {
-        if (!sessions.containsKey(event.getPlayer().getUniqueId()) || event.getTo() == null) return;
+        if (!isLocked(event.getPlayer()) || event.getTo() == null) return;
         Location from = event.getFrom();
         Location to = event.getTo();
         if (from.getX() != to.getX() || from.getY() != to.getY() || from.getZ() != to.getZ()) {
@@ -540,55 +657,55 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
 
     @EventHandler
     public void onDamage(EntityDamageEvent event) {
-        if (event.getEntity() instanceof Player player && sessions.containsKey(player.getUniqueId())) {
+        if (event.getEntity() instanceof Player player && isLocked(player)) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
-        if (sessions.containsKey(event.getPlayer().getUniqueId())) event.setCancelled(true);
+        if (isLocked(event.getPlayer())) event.setCancelled(true);
     }
 
     @EventHandler
     public void onDrop(PlayerDropItemEvent event) {
-        if (sessions.containsKey(event.getPlayer().getUniqueId())) event.setCancelled(true);
+        if (isLocked(event.getPlayer())) event.setCancelled(true);
     }
 
     @EventHandler
     public void onSwap(PlayerSwapHandItemsEvent event) {
-        if (sessions.containsKey(event.getPlayer().getUniqueId())) event.setCancelled(true);
+        if (isLocked(event.getPlayer())) event.setCancelled(true);
     }
 
     @EventHandler
     public void onHeld(PlayerItemHeldEvent event) {
-        if (sessions.containsKey(event.getPlayer().getUniqueId())) event.setCancelled(true);
+        if (isLocked(event.getPlayer())) event.setCancelled(true);
     }
 
     @EventHandler
     public void onInventoryOpen(InventoryOpenEvent event) {
-        if (event.getPlayer() instanceof Player player && sessions.containsKey(player.getUniqueId())) {
+        if (event.getPlayer() instanceof Player player && isLocked(player)) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
-        if (event.getWhoClicked() instanceof Player player && sessions.containsKey(player.getUniqueId())) {
+        if (event.getWhoClicked() instanceof Player player && isLocked(player)) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler
     public void onInventoryDrag(InventoryDragEvent event) {
-        if (event.getWhoClicked() instanceof Player player && sessions.containsKey(player.getUniqueId())) {
+        if (event.getWhoClicked() instanceof Player player && isLocked(player)) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler
     public void onCommand(PlayerCommandPreprocessEvent event) {
-        if (sessions.containsKey(event.getPlayer().getUniqueId())) event.setCancelled(true);
+        if (isLocked(event.getPlayer())) event.setCancelled(true);
     }
 
     @EventHandler
@@ -600,27 +717,138 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
         }
     }
 
+    private boolean isLocked(Player player) {
+        UUID uuid = player.getUniqueId();
+        return sessions.containsKey(uuid) || manualChecks.containsKey(uuid);
+    }
+
+    private void beginManualCheck(Player target, CommandSender caller) {
+        UUID uuid = target.getUniqueId();
+        if (sessions.containsKey(uuid)) {
+            caller.sendMessage(gradient("&cИгрок уже проходит процедуру наказания."));
+            return;
+        }
+        ManualCheckSession check = new ManualCheckSession(target, caller.getName());
+        if (manualChecks.putIfAbsent(uuid, check) != null) {
+            caller.sendMessage(gradient("&cИгрок уже вызван на проверку."));
+            return;
+        }
+
+        int timeoutSeconds = Math.max(30, getConfig().getInt("manual-check.timeout-seconds", 300));
+        target.closeInventory();
+        target.setInvulnerable(true);
+        target.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING,
+                timeoutSeconds * 20, 0, false, false, false));
+        target.sendTitle(gradient("&5&lVOIDMAIN"), gradient("&fВЫЗОВ НА ПРОВЕРКУ"),
+                5, 80, 10);
+        target.sendMessage(gradient("&5&lVOIDMAIN &8» &fАдминистратор вызвал вас на проверку. Не выходите с сервера."));
+        target.sendMessage(gradient("&7Проверку проводит: &d" + caller.getName()));
+        caller.sendMessage(gradient("&aИгрок &d" + target.getName() + " &aвызван на проверку."));
+        notifyStaff(gradient("&5&lVOIDMAIN &8» &d" + target.getName()
+                + " &fвызван на ручную проверку администратором &d" + caller.getName() + "&f."));
+
+        check.timeoutTask = Bukkit.getScheduler().runTaskLater(this, () -> {
+            if (manualChecks.containsKey(uuid)) {
+                releaseManualCheck(uuid, "Время проверки истекло", true);
+            }
+        }, timeoutSeconds * 20L);
+    }
+
+    private void releaseManualCheck(UUID uuid, String reason, boolean notifyTarget) {
+        ManualCheckSession check = manualChecks.remove(uuid);
+        if (check == null) return;
+        if (check.timeoutTask != null) check.timeoutTask.cancel();
+        Player target = check.player;
+        if (target != null && target.isOnline()) {
+            target.setInvulnerable(check.wasInvulnerable);
+            target.removePotionEffect(PotionEffectType.GLOWING);
+            if (check.previousGlowing != null) target.addPotionEffect(check.previousGlowing);
+            if (notifyTarget) {
+                target.sendMessage(gradient("&5&lVOIDMAIN &8» &fПроверка завершена: &d" + reason + "&f."));
+            }
+        }
+        notifyStaff(gradient("&aПроверка игрока &d" + check.playerName + " &aзавершена. &7" + reason));
+    }
+
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0 || args[0].equalsIgnoreCase("status")) {
+            ConfigurationSection thresholds = getConfig().getConfigurationSection("grim.flag-thresholds");
+            int checkCount = thresholds == null ? 0 : thresholds.getKeys(false).size();
             sender.sendMessage(gradient("&5&lVOIDMAIN &8» &fGrimAC: "
                     + (grimHooked ? "&aOK" : "&cNOT CONNECTED") + " &8| &fVulcan: "
                     + (vulcanHooked ? "&aOK" : "&cNOT CONNECTED")));
-            sender.sendMessage(gradient("&7Подсказка: красный статус интеграции означает, что API не подключилось; это не обязательно значит, что сам античит выключен."));
             sender.sendMessage(gradient("&7OP bypass: &f" + getConfig().getBoolean("exempt.operators", true)
-                    + " &8| &7Grim thresholds: &f" + getConfig().getConfigurationSection("grim.flag-thresholds").getKeys(false).size()));
+                    + " &8| &7Grim checks: &f" + checkCount));
+            sender.sendMessage(gradient("&7Ручных проверок: &f" + manualChecks.size()));
             return true;
         }
-        if (args[0].equalsIgnoreCase("reload")) {
-            if (!sender.hasPermission("voidmain.anticheat.admin")) {
-                sender.sendMessage("§cНет прав.");
+
+        if (!sender.hasPermission("voidmain.anticheat.admin")) {
+            sender.sendMessage(gradient("&cНедостаточно прав."));
+            return true;
+        }
+
+        if (args[0].equalsIgnoreCase("check")) {
+            if (args.length < 2) {
+                sender.sendMessage(gradient("&cИспользование: /voidac check <ник>"));
                 return true;
             }
+            Player target = Bukkit.getPlayerExact(args[1]);
+            if (target == null) {
+                sender.sendMessage(gradient("&cИгрок должен быть онлайн."));
+                return true;
+            }
+            beginManualCheck(target, sender);
+            return true;
+        }
+
+        if (args[0].equalsIgnoreCase("release")) {
+            if (args.length < 2) {
+                sender.sendMessage(gradient("&cИспользование: /voidac release <ник>"));
+                return true;
+            }
+            Player target = Bukkit.getPlayerExact(args[1]);
+            UUID uuid = target != null ? target.getUniqueId() : Bukkit.getOfflinePlayer(args[1]).getUniqueId();
+            if (!manualChecks.containsKey(uuid)) {
+                sender.sendMessage(gradient("&cИгрок не находится на проверке."));
+                return true;
+            }
+            releaseManualCheck(uuid, "Отпущен администратором " + sender.getName(), true);
+            sender.sendMessage(gradient("&aИгрок освобождён."));
+            return true;
+        }
+
+        if (args[0].equalsIgnoreCase("violations")) {
+            if (args.length < 2) {
+                sender.sendMessage(gradient("&cИспользование: /voidac violations <ник>"));
+                return true;
+            }
+            UUID uuid = Bukkit.getOfflinePlayer(args[1]).getUniqueId();
+            sender.sendMessage(gradient("&5&lVOIDMAIN &8» &fНарушений Vulcan у &d"
+                    + args[1] + "&f: &d" + getViolationCount(uuid) + "/5"));
+            return true;
+        }
+
+        if (args[0].equalsIgnoreCase("reset")) {
+            if (args.length < 2) {
+                sender.sendMessage(gradient("&cИспользование: /voidac reset <ник>"));
+                return true;
+            }
+            UUID uuid = Bukkit.getOfflinePlayer(args[1]).getUniqueId();
+            resetViolationCount(uuid);
+            sender.sendMessage(gradient("&aСчётчик нарушений игрока &d" + args[1] + " &aсброшен."));
+            return true;
+        }
+
+        if (args[0].equalsIgnoreCase("reload")) {
             reloadConfig();
+            loadViolations();
             sender.sendMessage(gradient("&5&lVOIDMAIN &8» &fКонфигурация перезагружена."));
             return true;
         }
-        sender.sendMessage("§dИспользование: /voidac <status|reload>");
+
+        sender.sendMessage(gradient("&dИспользование: /voidac <status|check|release|violations|reset|reload>"));
         return true;
     }
 
@@ -665,16 +893,18 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
         private final String check;
         private final List<ItemStack> items = new ArrayList<>();
         private final Location lastLocation;
+        private final int banDays;
         private final boolean wasInvulnerable;
         private final AtomicBoolean finished = new AtomicBoolean(false);
         private BukkitTask task;
 
-        private PunishmentSession(Player player, String source, String check) {
+        private PunishmentSession(Player player, String source, String check, int banDays) {
             this.player = player;
             this.uuid = player.getUniqueId();
             this.playerName = player.getName();
             this.source = source;
             this.check = check;
+            this.banDays = banDays;
             this.lastLocation = player.getLocation().clone();
             this.wasInvulnerable = player.isInvulnerable();
             for (ItemStack item : player.getInventory().getContents()) {
@@ -682,6 +912,23 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
                     this.items.add(item.clone());
                 }
             }
+        }
+    }
+
+    private final class ManualCheckSession {
+        private final Player player;
+        private final String playerName;
+        private final String caller;
+        private final boolean wasInvulnerable;
+        private final PotionEffect previousGlowing;
+        private BukkitTask timeoutTask;
+
+        private ManualCheckSession(Player player, String caller) {
+            this.player = player;
+            this.playerName = player.getName();
+            this.caller = caller;
+            this.wasInvulnerable = player.isInvulnerable();
+            this.previousGlowing = player.getPotionEffect(PotionEffectType.GLOWING);
         }
     }
 }
