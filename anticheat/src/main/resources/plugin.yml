@@ -1,5 +1,5 @@
 name: VoidMain-AntiCheat
-version: 1.0.1
+version: 1.0.2
 main: ru.voidmain.anticheat.VoidMainAntiCheat
 api-version: '1.21'
 load: POSTWORLD
@@ -11,13 +11,12 @@ authors: [NeZoX, VoidMain]
 description: Purple-white anti-cheat bridge for GrimAC and Vulcan
 commands:
   voidac:
-    description: VoidMain AntiCheat status and administration
-    usage: /voidac <status|reload>
-    permission: voidmain.anticheat.admin
+    description: VoidMain AntiCheat management and manual player checks
+    usage: /voidac <status|check|release|violations|reset|reload>
 permissions:
   voidmain.anticheat.admin:
-    description: Manage VoidMain AntiCheat
+    description: Manage VoidMain AntiCheat and call players for manual checks
     default: op
   voidmain.anticheat.bypass:
-    description: Bypass VoidMain AntiCheat checks and punishments
+    description: Bypass automatic VoidMain AntiCheat checks and punishments
     default: false
