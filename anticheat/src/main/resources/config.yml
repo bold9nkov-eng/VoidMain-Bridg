@@ -1,0 +1,49 @@
+# VoidMain AntiCheat — GrimAC + Vulcan event bridge
+# Paper 1.21.11 / Java 21
+
+prefix: "&5&lVOIDMAIN &8»"
+
+exempt:
+  # Operators are ignored automatically.
+  operators: true
+  # Additional permission for staff that should never be flagged or punished.
+  permission: "voidmain.anticheat.bypass"
+
+grim:
+  enabled: true
+  # Number of repeated flags from the SAME Grim check inside the time window.
+  # These are deliberately conservative to avoid banning from a single setback.
+  window-seconds: 15
+  flag-thresholds:
+    Reach: 4
+    Hitboxes: 6
+    MultiInteractA: 8
+    MultiInteractB: 8
+    AimDuplicateLook: 8
+    AimModulo360: 8
+
+vulcan:
+  enabled: true
+  # Intercepts Vulcan's own punishment only for combat checks.
+  # Non-combat Vulcan punishments continue to follow Vulcan's config.yml.
+  intercept-combat-punishments: true
+
+punishment:
+  enabled: true
+  # 30 ticks = 1.5 seconds of animation.
+  animation-ticks: 30
+  drop-inventory: true
+  # 0 = permanent name ban; otherwise number of days.
+  ban-days: 0
+  broadcast: true
+  reason-prefix: "VoidMain AntiCheat"
+  # Purple-white RGB colors used by the animation.
+  purple-rgb: "8A2BE2"
+  lavender-rgb: "C9A0FF"
+  white-rgb: "FFFFFF"
+
+messages:
+  title: "VOIDMAIN"
+  subtitle: "НАРУШЕНИЕ ОБНАРУЖЕНО"
+  kick: "&5&lVOIDMAIN &8» &fВы заблокированы античитом VoidMain."
+  broadcast: "&5&lVOIDMAIN &8» &fИгрок &d%player% &fзаблокирован за &d%check%&f."
