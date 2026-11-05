@@ -107,6 +107,17 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
         }
     }
 
+    private Plugin findPlugin(String... names) {
+        for (Plugin plugin : Bukkit.getPluginManager().getPlugins()) {
+            for (String name : names) {
+                if (plugin.getName().equalsIgnoreCase(name)) {
+                    return plugin;
+                }
+            }
+        }
+        return null;
+    }
+
     @Override
     public void onDisable() {
         for (PunishmentSession session : sessions.values()) {
