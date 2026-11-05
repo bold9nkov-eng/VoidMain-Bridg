@@ -1,4 +1,4 @@
-# VoidMain AntiCheat 1.0.1
+# VoidMain AntiCheat 1.0.2
 
 A small integration plugin. It does **not** repackage or modify the GrimAC or Vulcan binaries; it subscribes to their public events and coordinates the configured punishment sequence.
 
@@ -7,7 +7,7 @@ A small integration plugin. It does **not** repackage or modify the GrimAC or Vu
 - GrimAC (the server's tested build)
 - Vulcan (downloaded from its official SpigotMC distribution)
 - PacketEvents (required by Vulcan)
-- VoidMain-AntiCheat-1.0.1.jar (this bridge)
+- VoidMain-AntiCheat-1.0.2.jar (this bridge)
 
 The bridge detects GrimAC, Vulcan and PacketEvents as optional integrations; it remains enabled if at least one anti-cheat engine is present, and `/voidac status` shows which API hooks connected.
 
@@ -22,6 +22,10 @@ The bridge detects GrimAC, Vulcan and PacketEvents as optional integrations; it 
 ## Commands
 
 - `/voidac status`
+- `/voidac check <player>` — freeze an online player for manual review, including OPs; automatic punishment remains bypassed for exempt players.
+- `/voidac release <player>` — release the player from manual review.
+- `/voidac violations <player>` — view the saved Vulcan punishment-event count.
+- `/voidac reset <player>` — reset the saved count.
 - `/voidac reload`
 
 Permission: `voidmain.anticheat.admin` (default OP).
