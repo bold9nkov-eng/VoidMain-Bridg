@@ -336,8 +336,6 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
                 gradient(getConfig().getString("messages.subtitle", "НАРУШЕНИЕ ОБНАРУЖЕНО")),
                 0, repeats * 2, 5);
         player.playSound(player.getLocation(), Sound.BLOCK_BEACON_POWER_SELECT, 1.0f, 0.65f);
-        broadcastPunishment(player.getName(), check);
-
         session.task = Bukkit.getScheduler().runTaskTimer(this, new Runnable() {
             private int step;
 
@@ -391,12 +389,18 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
         if (!session.finished.compareAndSet(false, true)) return;
         Player player = session.player;
         Location dropLocation = session.lastLocation.clone();
-        if (player != null && player.isOnline()) {
-            dropLocation = player.getLocation().clone();
-            player.getInventory().clear();
+        boolean dropInventory = getConfig().getBoolean("punishment.drop-inventory", true);
+        if (player != null) {
+            if (player.isOnline()) {
+                dropLocation = player.getLocation().clone();
+            }
+            // Clear even during PlayerQuitEvent to prevent the saved inventory from reappearing on rejoin.
+            if (dropInventory) {
+                player.getInventory().clear();
+            }
         }
 
-        if (getConfig().getBoolean("punishment.drop-inventory", true)) {
+        if (dropInventory) {
             World world = dropLocation.getWorld();
             if (world != null) {
                 for (ItemStack item : session.items) {
@@ -425,6 +429,7 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
                 }
             }, 1L);
         }
+        broadcastPunishment(session.playerName, session.check);
         getLogger().warning("Punished " + session.playerName + " for " + reason);
     }
 
@@ -438,7 +443,8 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
 
     private String gradient(String text) {
         if (text == null || text.isEmpty()) return "";
-        String value = text.replace("&", "§");
+        // Strip legacy formatting codes before painting the VoidMain hex gradient.
+        String value = text.replaceAll("(?i)[&§][0-9A-FK-OR]", "");
         List<Integer> points = value.codePoints().boxed().toList();
         StringBuilder out = new StringBuilder();
         int purple = parseColor(getConfig().getString("punishment.purple-rgb", "8A2BE2"), 0x8A2BE2);
