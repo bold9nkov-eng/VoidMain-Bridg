@@ -65,13 +65,12 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
     public void onEnable() {
         saveDefaultConfig();
         PluginManager manager = Bukkit.getPluginManager();
-        Plugin grim = manager.getPlugin("GrimAC");
-        Plugin vulcan = manager.getPlugin("Vulcan");
-        Plugin packetEvents = manager.getPlugin("packetevents");
+        Plugin grim = findPlugin("GrimAC");
+        Plugin vulcan = findPlugin("Vulcan");
+        Plugin packetEvents = findPlugin("packetevents", "PacketEvents");
 
-        if (grim == null || !grim.isEnabled() || vulcan == null || !vulcan.isEnabled()
-                || packetEvents == null || !packetEvents.isEnabled()) {
-            getLogger().severe("Не найдены зависимости GrimAC, Vulcan или PacketEvents. Плагин отключён.");
+        if ((grim == null || !grim.isEnabled()) && (vulcan == null || !vulcan.isEnabled())) {
+            getLogger().severe("Не найден ни GrimAC, ни Vulcan. VoidMain AntiCheat не может работать без хотя бы одного движка проверки.");
             manager.disablePlugin(this);
             return;
         }
@@ -81,8 +80,19 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
             getCommand("voidac").setExecutor(this);
         }
 
-        registerVulcanEvents(vulcan);
-        registerGrimEvents(grim);
+        if (vulcan != null && vulcan.isEnabled()) {
+            if (packetEvents == null || !packetEvents.isEnabled()) {
+                getLogger().severe("Vulcan найден, но PacketEvents не обнаружен. Проверки Vulcan недоступны.");
+            }
+            registerVulcanEvents(vulcan);
+        } else {
+            getLogger().warning("Vulcan не найден — подключение к Vulcan пропущено; GrimAC продолжит работать.");
+        }
+        if (grim != null && grim.isEnabled()) {
+            registerGrimEvents(grim);
+        } else {
+            getLogger().warning("GrimAC не найден — подключение к GrimAC пропущено; Vulcan продолжит работать.");
+        }
 
         Bukkit.getScheduler().runTaskTimer(this, () -> {
             for (Player player : Bukkit.getOnlinePlayers()) {
@@ -583,8 +593,9 @@ public final class VoidMainAntiCheat extends JavaPlugin implements Listener, Com
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0 || args[0].equalsIgnoreCase("status")) {
             sender.sendMessage(gradient("&5&lVOIDMAIN &8» &fGrimAC: "
-                    + (grimHooked ? "&aOK" : "&cERROR") + " &8| &fVulcan: "
-                    + (vulcanHooked ? "&aOK" : "&cERROR")));
+                    + (grimHooked ? "&aOK" : "&cNOT CONNECTED") + " &8| &fVulcan: "
+                    + (vulcanHooked ? "&aOK" : "&cNOT CONNECTED")));
+            sender.sendMessage(gradient("&7Подсказка: красный статус интеграции означает, что API не подключилось; это не обязательно значит, что сам античит выключен."));
             sender.sendMessage(gradient("&7OP bypass: &f" + getConfig().getBoolean("exempt.operators", true)
                     + " &8| &7Grim thresholds: &f" + getConfig().getConfigurationSection("grim.flag-thresholds").getKeys(false).size()));
             return true;
