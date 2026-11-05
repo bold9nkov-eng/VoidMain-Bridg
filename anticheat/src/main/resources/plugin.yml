@@ -1,9 +1,9 @@
 name: VoidMain-AntiCheat
-version: 1.0.0
+version: 1.0.1
 main: ru.voidmain.anticheat.VoidMainAntiCheat
 api-version: '1.21'
 load: POSTWORLD
-depend:
+softdepend:
   - GrimAC
   - Vulcan
   - packetevents
